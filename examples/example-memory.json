@@ -1,0 +1,198 @@
+{
+  "version": "1.0",
+  "metadata": {
+    "memory_id": "mem_example_001",
+    "source_agent": "codex",
+    "source_session_id": "01a08943-75e9-7953-bcc1-141f7ad3cc3d",
+    "created_at": "2026-09-29T03:49:48.286808Z",
+    "updated_at": "2026-09-29T03:49:48.286811Z",
+    "schema_version": "1.0"
+  },
+  "project": {
+    "name": "demo-project",
+    "path": "D:\\Memory_transfer\\agent-memory-transfer\\.example-workspace\\demo-project",
+    "language": [
+      "Java"
+    ],
+    "framework": [
+      "Maven"
+    ],
+    "architecture": null,
+    "structure_summary": "src/、AGENTS.md、pom.xml",
+    "important_modules": [
+      "src"
+    ],
+    "project_constraints": [
+      "所有新增接口必须写单元测试"
+    ]
+  },
+  "task": {
+    "id": "task_01a08943-75e9-7953-bcc1-141f7ad3cc3d",
+    "title": "接口测试返回保养日期不能为空",
+    "goal": "接口测试返回保养日期不能为空。响应是200ok，但是 帮我检测修复",
+    "background": "会话来自 codex；工作目录 D:\\Memory_transfer\\agent-memory-transfer\\.example-workspace\\demo-project；共 1 条用户消息、6 次工具调用、2 次失败",
+    "requirements": [
+      "接口测试返回保养日期不能为空"
+    ],
+    "constraints": [
+      "所有新增接口必须写单元测试"
+    ],
+    "status": "in_progress",
+    "confidence": "low",
+    "reconstructed_by": "heuristic"
+  },
+  "conversation": {
+    "summary": "在 D:\\Memory_transfer\\agent-memory-transfer\\.example-workspace\\demo-project 中，用户先后提出 1 项需求；Agent 执行 6 次工具调用（其中 2 次失败），改动 1 个文件。",
+    "key_points": [
+      "接口测试返回保养日期不能为空。响应是200ok，但是{",
+      "Agent 结论：已把日期字段改为 String 接收，请重新测试。",
+      "Agent 结论：跨行记录的助手消息"
+    ],
+    "user_preferences": [],
+    "important_messages": [
+      "接口测试返回保养日期不能为空。响应是200ok，但是{\n \"failed\": true,\n \"code\": \"保养日期不能为空\"\n}\n帮我检测修复"
+    ],
+    "raw_session_ref": null
+  },
+  "implementation": {
+    "completed": [
+      "修改了 1 个文件：src/main/java/EquipmentMaintenance.java",
+      "通过验证：mvn -q -DskipTests compile"
+    ],
+    "modified_files": [
+      {
+        "path": "src/main/java/EquipmentMaintenance.java",
+        "summary": "修改 2 处（+2/-2），共 2 次编辑",
+        "status": "modified"
+      }
+    ],
+    "created_files": [],
+    "deleted_files": []
+  },
+  "decisions": [],
+  "attempts": [
+    {
+      "action": "mvn -q test",
+      "purpose": null,
+      "result": "测试执行失败",
+      "success": false,
+      "error": "[ERROR] Tests run: 3, Failures: 1",
+      "lesson": null
+    },
+    {
+      "action": "修改文件：src/main/java/EquipmentMaintenance.java",
+      "purpose": null,
+      "result": "apply_patch verification failed: Failed to find expected lines in src/main/java/EquipmentMaintenance.java:",
+      "success": false,
+      "error": "apply_patch verification failed: Failed to find expected lines in src/main/java/EquipmentMaintenance.java:",
+      "lesson": "（推断）该文件改动未取得预期效果，建议回看改动点是否命中真正的故障位置"
+    },
+    {
+      "action": "mvn -q -DskipTests compile",
+      "purpose": null,
+      "result": "执行成功",
+      "success": true,
+      "error": null,
+      "lesson": null
+    }
+  ],
+  "validation": {
+    "tests": [
+      {
+        "command": "mvn -q -DskipTests compile",
+        "status": "passed",
+        "output_summary": "BUILD SUCCESS"
+      },
+      {
+        "command": "mvn -q test",
+        "status": "failed",
+        "output_summary": "[ERROR] Tests run: 3, Failures: 1"
+      }
+    ],
+    "build": {
+      "command": "mvn -q -DskipTests compile",
+      "status": "passed",
+      "output_summary": "BUILD SUCCESS"
+    },
+    "lint": [],
+    "manual_validation": []
+  },
+  "git": {
+    "repository": null,
+    "branch": null,
+    "commit": null,
+    "status_summary": "当前目录不是 Git 仓库",
+    "changed_files": [],
+    "diff_summary": null,
+    "has_uncommitted_changes": false
+  },
+  "unresolved": [
+    {
+      "description": "测试/构建失败：[ERROR] Tests run: 3, Failures: 1",
+      "priority": "high",
+      "context": "mvn -q test",
+      "suspected_cause": "需进一步定位（推断：该问题在会话结束时仍未被解决）"
+    },
+    {
+      "description": "命令执行失败：apply_patch verification failed: Failed to find expected lines in src/main/java/EquipmentMaintenance.java:",
+      "priority": "medium",
+      "context": "apply_patch <<'PATCH'\n*** Begin Patch\n*** Update File: src/main/java/EquipmentMaintenance.java\n@@\n-  private String maintenanceDate;\n+  private String maintenanceDate;\n*** End Patch\nPATCH",
+      "suspected_cause": "需进一步定位（推断：该问题在会话结束时仍未被解决）"
+    },
+    {
+      "description": "上一轮任务被中断，工作未收尾",
+      "priority": "medium",
+      "context": "interrupted",
+      "suspected_cause": null
+    },
+    {
+      "description": "项目不是 Git 仓库，无法通过 Git 校验改动",
+      "priority": "low",
+      "context": "D:\\Memory_transfer\\agent-memory-transfer\\.example-workspace\\demo-project",
+      "suspected_cause": null
+    }
+  ],
+  "next_actions": [
+    {
+      "action": "排查并修复：mvn -q test（当前报错：[ERROR] Tests run: 3, Failures: 1）",
+      "reason": "该操作在会话结束前仍未成功",
+      "priority": 1,
+      "completed": false
+    },
+    {
+      "action": "排查并修复：修改文件：src/main/java/EquipmentMaintenance.java（当前报错：apply_patch verification failed: Failed to find expected lines in src/main/java/EquipmentMaintenance.java:）",
+      "reason": "该操作在会话结束前仍未成功",
+      "priority": 2,
+      "completed": false
+    }
+  ],
+  "risks": [],
+  "runtime": {
+    "working_directory": "D:\\Memory_transfer\\agent-memory-transfer\\.example-workspace\\demo-project",
+    "operating_system": "Windows 11",
+    "shell": "gitbash",
+    "environment_summary": {
+      "python": "3.13.14",
+      "home": "C:\\Users\\HUAWEI"
+    },
+    "running_processes": [],
+    "recent_commands": []
+  },
+  "stats": {
+    "reconstruction": "heuristic",
+    "total_events": 12,
+    "user_messages": 1,
+    "tool_calls": 6,
+    "failures": 2,
+    "test_runs": 2,
+    "edited_files": 1,
+    "digest_tokens_estimate": 389,
+    "compression": {
+      "input_events": 12,
+      "_file_read_aggregated": 0,
+      "kept_events": 12,
+      "dropped": 0
+    },
+    "llm_used": false
+  }
+}

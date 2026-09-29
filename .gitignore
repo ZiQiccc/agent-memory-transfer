@@ -1,0 +1,29 @@
+# ---- 凭据：绝不能入库 ----
+.env
+.env.*
+!.env.example
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---- 本地运行产物 ----
+# 任务包会被注入到目标项目的 .agent-transfer/，不应跟随仓库
+.agent-transfer/
+report.html
