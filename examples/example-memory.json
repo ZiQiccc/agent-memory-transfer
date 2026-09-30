@@ -4,8 +4,8 @@
     "memory_id": "mem_example_001",
     "source_agent": "codex",
     "source_session_id": "01a08943-75e9-7953-bcc1-141f7ad3cc3d",
-    "created_at": "2026-09-29T03:49:48.286808Z",
-    "updated_at": "2026-09-29T03:49:48.286811Z",
+    "created_at": "2026-09-29T09:00:32.446010Z",
+    "updated_at": "2026-09-29T09:00:32.446016Z",
     "schema_version": "1.0"
   },
   "project": {
@@ -101,12 +101,14 @@
       {
         "command": "mvn -q -DskipTests compile",
         "status": "passed",
-        "output_summary": "BUILD SUCCESS"
+        "output_summary": "BUILD SUCCESS",
+        "source": "program"
       },
       {
         "command": "mvn -q test",
         "status": "failed",
-        "output_summary": "[ERROR] Tests run: 3, Failures: 1"
+        "output_summary": "[ERROR] Tests run: 3, Failures: 1",
+        "source": "program"
       }
     ],
     "build": {
@@ -118,13 +120,19 @@
     "manual_validation": []
   },
   "git": {
-    "repository": null,
-    "branch": null,
-    "commit": null,
-    "status_summary": "当前目录不是 Git 仓库",
-    "changed_files": [],
-    "diff_summary": null,
-    "has_uncommitted_changes": false
+    "repository": "https://github.com/ZiQiccc/agent-memory-transfer.git",
+    "branch": "main",
+    "commit": "0b7091e",
+    "status_summary": "5 个已跟踪文件被修改，2 个未跟踪文件",
+    "changed_files": [
+      "../../src/amt/adapters/codex/detector.py",
+      "../../src/amt/providers/llm.py",
+      "../../tests/test_codex_target.py",
+      "../../tests/test_llm.py",
+      "../../tests/test_workbuddy_source.py"
+    ],
+    "diff_summary": "src/amt/adapters/codex/detector.py |  67 ++++++++++++++-\n src/amt/providers/llm.py           |  10 ++-\n tests/test_codex_target.py         |  98 +++++++++++++++++++++\n tests/test_llm.py                  | 169 ++++++++++++++++++++++++++++++++++++-\n tests/test_workbuddy_source.py     |  56 ++++++++++++\n 5 files changed, 392 insertions(+), 8 deletions(-)",
+    "has_uncommitted_changes": true
   },
   "unresolved": [
     {
@@ -144,12 +152,6 @@
       "priority": "medium",
       "context": "interrupted",
       "suspected_cause": null
-    },
-    {
-      "description": "项目不是 Git 仓库，无法通过 Git 校验改动",
-      "priority": "low",
-      "context": "D:\\Memory_transfer\\agent-memory-transfer\\.example-workspace\\demo-project",
-      "suspected_cause": null
     }
   ],
   "next_actions": [
@@ -166,7 +168,13 @@
       "completed": false
     }
   ],
-  "risks": [],
+  "risks": [
+    {
+      "description": "工作区存在 5 个未提交改动",
+      "impact": "跨 Agent 接续时若误回滚将丢失改动",
+      "mitigation": "接续前先用 git diff 确认改动范围；本工具默认不自动 commit"
+    }
+  ],
   "runtime": {
     "working_directory": "D:\\Memory_transfer\\agent-memory-transfer\\.example-workspace\\demo-project",
     "operating_system": "Windows 11",

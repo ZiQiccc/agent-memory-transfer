@@ -314,6 +314,9 @@ class MigrationOrchestrator:
                     launch = launcher(target_context, auto_launch=options.auto_launch)  # type: ignore[call-arg]
                     outcome.launch = launch
                     step.detail = launch.message
+                    # 启动器的说明（例如「命令行只传单行摘要」）必须一并带出，
+                    # 否则用户不明白为什么命令行里看不到完整 Prompt。
+                    record.warnings.extend(launch.warnings)
                     if launch.degraded:
                         record.warnings.append(launch.message)
 

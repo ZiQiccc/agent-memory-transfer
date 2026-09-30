@@ -247,3 +247,101 @@ def test_registry_exposes_symmetric_pairs(ctx):
     assert ("workbuddy", "codex") in pairs
     # 组合数 = 来源数 × 目标数 - 自身对自身（4 × 2 - 2 = 6）
     assert len(pairs) == 4 * 2 - 2
+
+
+# ----------------------------------------------------------------------
+# Codex 可用性探测：必须零副作用
+# ----------------------------------------------------------------------
+def _codex_ctx(tmp_path, *, auth: dict | None, session_text: str | None = None):
+    """构造一个只有本地文件的 Codex 环境；CLI 指向不存在的路径。
+
+    这样探测逻辑只能靠「凭据文件 + 既有会话」判断，绝不会真的去启动 Codex。
+    """
+    import json
+
+    from amt.config import AMTConfig, ClaudeConfig, CodexConfig, LLMConfig, WorkBuddyConfig
+    from amt.context import AppContext
+
+    home = tmp_path / "codex-home"
+    sessions = home / "sessions" / "2026" / "09" / "29"
+    sessions.mkdir(parents=True)
+    if auth is not None:
+        (home / "auth.json").write_text(json.dumps(auth), encoding="utf-8")
+    if session_text is not None:
+        (sessions / "rollout-2026-09-29T10-00-00-abc.jsonl").write_text(
+            session_text, encoding="utf-8"
+        )
+
+    return AppContext(
+        config=AMTConfig(
+            home_dir=tmp_path / "amt-codex",
+            llm=LLMConfig(enabled=False),
+            codex=CodexConfig(home=home, executable=str(tmp_path / "no-codex-exe")),
+            claude=ClaudeConfig(projects_dir=tmp_path / "no-claude", executable=str(tmp_path / "none")),
+            workbuddy=WorkBuddyConfig(projects_dir=tmp_path / "no-wb"),
+        )
+    )
+
+
+def test_codex_login_probe_needs_credential_file(tmp_path):
+    """没有 auth.json 时必须说明「需要先 codex login」，而不是含糊地说不可用。"""
+    from amt.adapters.codex.detector import CodexDetector
+
+    detector = CodexDetector(_codex_ctx(tmp_path, auth=None))
+    # 可执行文件不存在 → 明确报未找到
+    usable, note = detector.cli_status()
+    assert usable is False
+    assert "未找到" in note
+
+
+def test_codex_login_probe_with_cli_present_but_no_credential(tmp_path, monkeypatch):
+    from amt.adapters.codex.detector import CodexDetector
+
+    ctx = _codex_ctx(tmp_path, auth=None)
+    ctx.config.codex.executable = sys.executable  # 假装 CLI 存在（但不会被执行）
+    usable, note = CodexDetector(ctx).cli_status()
+    assert usable is False
+    assert "codex login" in note
+
+
+def test_codex_login_probe_accepts_credential_file(tmp_path, monkeypatch):
+    from amt.adapters.codex.detector import CodexDetector
+
+    ctx = _codex_ctx(tmp_path, auth={"OPENAI_API_KEY": "sk-dummy"})
+    ctx.config.codex.executable = sys.executable
+    detector = CodexDetector(ctx)
+
+    before = set(p for p in ctx.config.codex.resolved_home().rglob("*"))
+    usable, note = detector.cli_status()
+    detector.cli_status()
+    after = set(p for p in ctx.config.codex.resolved_home().rglob("*"))
+
+    assert usable is True
+    assert "未主动发请求" in note, "只能声称「看起来可用」，不能声称已验证"
+    assert before == after, "探测不得产生任何副作用（早期用真发请求探活，污染了用户会话库）"
+
+
+def test_codex_login_probe_detects_expired_credential(tmp_path):
+    """最近会话全是鉴权失败时，应提示凭据可能已过期。"""
+    from amt.adapters.codex.detector import CodexDetector
+
+    ctx = _codex_ctx(
+        tmp_path,
+        auth={"OPENAI_API_KEY": "sk-dummy"},
+        session_text='{"type":"error","message":"401 Unauthorized: Please run codex login"}\n',
+    )
+    ctx.config.codex.executable = sys.executable
+    usable, note = CodexDetector(ctx).cli_status()
+    assert usable is False
+    assert "鉴权失败" in note
+
+
+def test_codex_installation_notes_include_launchability(tmp_path):
+    """能力矩阵要能看出「装了但能不能自动启动」。"""
+    from amt.adapters.codex.detector import CodexDetector
+
+    ctx = _codex_ctx(tmp_path, auth={"OPENAI_API_KEY": "sk-dummy"})
+    ctx.config.codex.executable = sys.executable
+    installation = CodexDetector(ctx).installation()
+    assert installation.target_supported is True
+    assert any("可自动启动" in n or "无法自动启动" in n for n in installation.notes)

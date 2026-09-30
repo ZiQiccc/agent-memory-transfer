@@ -207,3 +207,59 @@ def test_normalizer_maps_workbuddy_tools(workbuddy_ctx):
 
     test_run = next(e for e in normalized if e.category == "test")
     assert test_run.command == "mvn -q test"
+
+# ----------------------------------------------------------------------
+# 端到端：WorkBuddy → Codex（用户实际要走的链路）
+# ----------------------------------------------------------------------
+def test_workbuddy_to_codex_end_to_end(workbuddy_ctx, project_root):
+    """WorkBuddy 会话迁移到 Codex：AGENTS.md 内联、产物齐全、幂等、Memory 可追溯。
+
+    这条链路此前只做过 dry-run，没有落到真实注入。用户的主链路就是它，
+    因此必须有一条端到端断言把它钉住。
+    """
+    from amt.adapters.registry import default_registry
+    from amt.core.migration import MigrationOrchestrator
+    from amt.core.models import MigrationOptions
+    from amt.core.storage import Storage
+
+    orchestrator = MigrationOrchestrator(
+        workbuddy_ctx, storage=Storage(workbuddy_ctx.config), registry=default_registry(workbuddy_ctx)
+    )
+    outcome = orchestrator.migrate(
+        source_agent="workbuddy",
+        target_agent="codex",
+        session_id=WORKBUDDY_SESSION_ID,
+        options=MigrationOptions(use_llm=False, auto_launch=False),
+        project_root=str(project_root),
+    )
+
+    assert outcome.record.status == "completed"
+    assert outcome.memory is not None
+    # 来源必须如实标注，不能因为换了目标就丢掉出处
+    assert outcome.memory.metadata.source_agent == "workbuddy"
+
+    agents = project_root / "AGENTS.md"
+    assert agents.is_file(), "Codex 不支持 @ 导入，必须内联写入 AGENTS.md"
+    text = agents.read_text(encoding="utf-8")
+    assert text.count("<!-- agent-memory-transfer:begin -->") == 1
+    assert "目标：" in text
+    # 内联段必须有长度上限：它每个会话都会被加载
+    section = text.split("<!-- agent-memory-transfer:begin -->")[1].split(
+        "<!-- agent-memory-transfer:end -->"
+    )[0]
+    assert len(section) < 3000
+
+    transfer = project_root / ".agent-transfer"
+    for name in ("memory.md", "memory.json", "manifest.json", "source.json"):
+        assert (transfer / name).is_file(), name
+
+    # 幂等：再迁移一次不得累积标记段
+    orchestrator.migrate(
+        source_agent="workbuddy",
+        target_agent="codex",
+        session_id=WORKBUDDY_SESSION_ID,
+        options=MigrationOptions(use_llm=False, auto_launch=False),
+        project_root=str(project_root),
+    )
+    again = agents.read_text(encoding="utf-8")
+    assert again.count("<!-- agent-memory-transfer:begin -->") == 1

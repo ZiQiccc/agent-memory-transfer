@@ -10,7 +10,7 @@
 | 来源 Agent | codex |
 | 来源会话 | `01a08943-75e9-7953-bcc1-141f7ad3cc3d` |
 | 协议版本 | 1.0 |
-| 生成时间 | 2026-09-29 11:49:48 +0800 |
+| 生成时间 | 2026-09-29 17:00:32 +0800 |
 | 重建方式 | heuristic |
 | 置信度 | 低 |
 
@@ -55,10 +55,10 @@
 
 ## 5. 验证结果
 
-| 命令 | 结果 | 输出摘要 |
-| --- | --- | --- |
-| `mvn -q -DskipTests compile` | ✅ 通过 | BUILD SUCCESS |
-| `mvn -q test` | ❌ 失败 | [ERROR] Tests run: 3, Failures: 1 |
+| 命令 | 结果 | 来源 | 输出摘要 |
+| --- | --- | --- | --- |
+| `mvn -q -DskipTests compile` | ✅ 通过 | 程序解析 | BUILD SUCCESS |
+| `mvn -q test` | ❌ 失败 | 程序解析 | [ERROR] Tests run: 3, Failures: 1 |
 
 - 构建：passed（`mvn -q -DskipTests compile`）
 
@@ -79,8 +79,6 @@
 PATCH`
 - **[中] 上一轮任务被中断，工作未收尾**
   - 上下文：`interrupted`
-- **[低] 项目不是 Git 仓库，无法通过 Git 校验改动**
-  - 上下文：`D:\Memory_transfer\agent-memory-transfer\.example-workspace\demo-project`
 
 ## 7. 下一步行动
 
@@ -89,21 +87,41 @@ PATCH`
 2. 排查并修复：修改文件：src/main/java/EquipmentMaintenance.java（当前报错：apply_patch verification failed: Failed to find expected lines in src/main/java/EquipmentMaintenance.java:）
    - 依据：该操作在会话结束前仍未成功
 
-## 8. Git 状态
+## 8. 风险提示
 
-- 分支：`unknown`　HEAD：`unknown`
-- 状态：当前目录不是 Git 仓库
+- **工作区存在 5 个未提交改动**
+  - 影响：跨 Agent 接续时若误回滚将丢失改动
+  - 建议：接续前先用 git diff 确认改动范围；本工具默认不自动 commit
+
+## 9. Git 状态
+
+- 分支：`main`　HEAD：`0b7091e`
+- 状态：5 个已跟踪文件被修改，2 个未跟踪文件
+- 改动文件（5）：`../../src/amt/adapters/codex/detector.py`、`../../src/amt/providers/llm.py`、`../../tests/test_codex_target.py`、`../../tests/test_llm.py`、`../../tests/test_workbuddy_source.py`
+
+<details><summary>git diff --stat</summary>
+
+```
+src/amt/adapters/codex/detector.py |  67 ++++++++++++++-
+ src/amt/providers/llm.py           |  10 ++-
+ tests/test_codex_target.py         |  98 +++++++++++++++++++++
+ tests/test_llm.py                  | 169 ++++++++++++++++++++++++++++++++++++-
+ tests/test_workbuddy_source.py     |  56 ++++++++++++
+ 5 files changed, 392 insertions(+), 8 deletions(-)
+```
+
+</details>
 
 > 说明：Memory 只描述状态，**真实代码以文件系统为准，真实变更以 Git 为准**。
 > 本工具默认不自动 commit，Working Tree 保持原样。
 
-## 9. 运行环境
+## 10. 运行环境
 
 - 工作目录：`D:\Memory_transfer\agent-memory-transfer\.example-workspace\demo-project`
 - 操作系统：Windows 11
 - Shell：gitbash
 
-## 10. 冲突处理原则
+## 11. 冲突处理原则
 
 如本文件描述与当前项目实际状态冲突，**以真实状态为准**，优先级为：
 

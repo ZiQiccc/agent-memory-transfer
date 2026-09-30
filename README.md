@@ -5,7 +5,7 @@
 再注入到另一个 Agent，让它从中断处继续，而不是重新分析项目。
 
 ```text
-Codex / Claude Code / Cursor 会话
+Codex / Claude Code / Cursor / WorkBuddy 会话
    ↓ Source Adapter（理解各自私有格式）
 AgentEvent[]                        ← 跨 Agent 第一层协议
    ↓ Normalizer
@@ -28,8 +28,9 @@ Canonical Memory                    ← 跨 Agent 唯一事实协议
 | **Target** | ✅ Claude Code（`CLAUDE.md` + `@` 导入）、✅ Codex（`AGENTS.md` 内联）、❌ Cursor / WorkBuddy（无**已验证**的注入入口，如实标注不支持） |
 | 迁移组合 | 4 来源 × 2 目标 = **6 条**，由中间协议推导，无需为每一对单独开发 |
 | Memory Engine | 归一化 / 压缩 / 确定性重建 / 校验 / 渲染 / 脱敏 |
-| LLM 通道 | ✅ OpenAI 兼容（中转站 / DeepSeek / 通义 / 本地 vLLM / Ollama / One-API），带能力降级阶梯 + `amt llm-check` 连通性自检 |
-| 质量对比 | ✅ `amt compare` 启发式 vs LLM，并校验「事实字段不变量」 |
+| LLM 通道 | ✅ OpenAI 兼容（中转站 / DeepSeek / 通义 / 本地 vLLM / Ollama / One-API），带能力降级阶梯 + 思维链模型适配 + `amt llm-check` 连通性自检 |
+| 凭据管理 | ✅ `.env` 文件（`AMT_ENV_FILE` → `$AMT_HOME/.env` → 当前目录），密钥不落盘、不序列化、不打印 |
+| 质量对比 | ✅ `amt compare` 启发式 vs LLM，并校验「事实字段不变量」（已用真实模型跑通） |
 | GUI | ✅ `amt report` 生成自包含 HTML（概览 / 会话 / 记忆 / 迁移历史 / 完整对话） |
 | 未实现 | Mimo Code / OpenCode / Antigravity 的 Adapter；桌面端 GUI（用 HTML 报告替代） |
 
@@ -57,14 +58,14 @@ pip install -e ".[dev]"
 ### 常用命令
 
 ```bash
-amt agents                      # Agent 能力矩阵（-v 看每个 Agent 的详细说明）
+amt agents                      # Agent 能力矩阵（-v 看每个 Agent 的详细说明与可用性）
 amt sessions codex              # 列会话（也可 claude / cursor / workbuddy）
 amt extract codex <session-id>  # 只生成 Canonical Memory
 amt preview <memory-id>         # 查看已生成的 Memory
-amt migrate --from codex --to claude --dry-run     # 只看不写
-amt migrate --from codex --to claude --session <id>
-amt llm-check --llm-base-url ... --llm-model ...   # 验证 LLM 端点（真实最小调用）
-amt compare --session <id> --llm --llm-base-url ... --llm-model ...   # 质量对比
+amt migrate --from workbuddy --to codex --dry-run  # 只看不写
+amt migrate --from workbuddy --to codex --session <id> --project-root <dir>
+amt llm-check                   # 验证 LLM 端点（读 .env；真实最小调用）
+amt compare --from workbuddy --session <id>        # 质量对比（启发式 vs LLM）
 amt report                      # 生成 HTML 报告并打开
 amt history                     # 迁移历史
 amt config [--init]             # 查看 / 初始化配置
@@ -87,13 +88,40 @@ amt config [--init]             # 查看 / 初始化配置
 
 ### 启用 LLM
 
-```bash
-# 方式一：配置文件（把 llm.enabled 改为 true，填 base_url 与 model）
-export AMT_LLM_API_KEY=sk-xxxx        # 建议用环境变量，不要把 Key 写进配置文件
-amt config --init
-amt llm-check                          # 先自检：端点可达 / 鉴权 / 策略 / token
+推荐把凭据放进 `.env`（已被 `.gitignore` 排除，不会误提交）：
 
-# 方式二：命令行直接指定（凭据不必落盘）
+```bash
+cd agent-memory-transfer
+cp .env.example .env      # 然后填 base_url / model / 密钥
+amt llm-check             # 先自检：端点可达 / 鉴权 / 策略 / 耗时 / token
+```
+
+`.env` 的查找顺序与优先级：
+
+```text
+查找：AMT_ENV_FILE → $AMT_HOME/.env → 当前目录/.env
+优先级：命令行参数 > 真实环境变量 > .env 文件 > config.yaml > 内置默认值
+```
+
+`.env` 里可写 `AMT_LLM_API_KEY` / `AMT_LLM_BASE_URL` / `AMT_LLM_MODEL`，
+也接受更短的 `api_key` / `base_url` / `model`（配合中转站时更顺手）；
+`AMT_LLM_TIMEOUT`、`AMT_LLM_MAX_TOKENS` 可选。
+**真实环境变量只认 `AMT_LLM_*` 前缀** —— 否则系统里任何一个叫 `MODEL`、`API_KEY`
+的变量都会串味进来。
+
+三条与凭据安全相关的约定：
+
+- `base_url` + `model` + `api_key` 齐全时**自动启用** LLM，避免「配好了却忘了开、
+  静默走了启发式」；想显式关掉就在 `.env` 里写 `AMT_LLM_ENABLED=false`。
+- 从 `.env` 读到的 `api_key` 只存在私有属性里，**不参与任何序列化**，
+  因此 `amt config --init` 不会把密钥写进 `config.yaml`。
+- `amt llm-check` 的「来源」列会写清每个值是谁给的（`.env` / 环境变量 / 配置文件），
+  但**永不打印密钥本身**。
+
+也可以完全不走 `.env`：
+
+```bash
+# 命令行直接指定（凭据不落盘）
 amt llm-check --llm-base-url https://your-relay.example.com/v1 \
   --llm-model gpt-4o-mini --llm-api-key sk-xxxx
 
@@ -146,13 +174,15 @@ agent-memory-transfer/
 │   │   ├── cursor/                    detector / parser / source（Source only）
 │   │   └── workbuddy/                 detector / parser / source（Source only）
 │   ├── services/                      git / filesystem / process / shell / security
+│   │                                  launch.py：交互式启动的参数投递策略
 │   ├── providers/llm.py               OpenAI 兼容 Provider（含能力降级阶梯）
 │   └── gui/report.py                  自包含 HTML 报告
 ├── tools/
 │   ├── generate_example.py            在沙箱里跑一遍链路并产出 examples/（合成数据）
 │   └── mock_llm_server.py             OpenAI 兼容的规则模拟器（链路验证用）
 ├── examples/                          example-memory.md / report.html（均为合成数据）
-└── tests/                             166 项测试，不依赖本机真实会话数据
+├── .env.example                       凭据文件模板（.env 已被 .gitignore 排除）
+└── tests/                             199 项测试，不依赖本机真实会话数据
 ```
 
 ### 不可违反的架构边界
@@ -208,18 +238,19 @@ Memory 只描述状态，**真实状态优先**：
 
 ### 5.1 增加「确定性重建」通道（偏离）
 
-文档假设由 LLM 完成记忆提取（技术架构 §22 / §43），但实测环境**没有可用的 LLM 凭据**。
-若只实现 LLM 路径，整条链路当天就不可运行，POC 的核心命题也无法验证。
-
-因此 Memory Engine 采用 **「确定性基线 + LLM 语义增强」**：
+文档假设由 LLM 完成记忆提取（技术架构 §22 / §43）。本实现改为
+**「确定性基线 + LLM 语义增强」** 双通道：
 
 1. 先用 `HeuristicReconstructor` 生成一份字段完整、可离线运行的 Memory；
 2. LLM 可用时，用它的归纳结果覆盖**语义字段**；
 3. **事实字段永不被 LLM 覆盖** —— 项目、Git、运行时、测试结果一律来自程序读取，
    而且 LLM 的输出契约里**根本不含**这些字段（见 `llm_schema.py`）。
 
-LLM 调用失败时自动回退，并把原因写进 warnings。重建方式与置信度会写进
-`task.reconstructed_by` / `task.confidence` 并在 CLI 与报告中展示。
+理由不只是「当时没有凭据」：这条设计让**无 LLM 的 CI、离线环境、额度耗尽**都能跑通
+完整链路，LLM 只是质量增量而不是单点依赖；LLM 调用失败时自动回退并把原因写进 warnings。
+重建方式与置信度写进 `task.reconstructed_by` / `task.confidence`，在 CLI 与报告中展示。
+
+LLM 通道现已用**真实模型（经中转站）**验证，增量数据见 §7.2。
 
 ### 5.2 Memory 本体也必须脱敏（偏离，强化）
 
@@ -265,14 +296,22 @@ Cursor 没有官方的上下文注入入口，可行手段只剩「项目规则�
 解法在 Normalizer 层（`unwrap_injected_prompt`）：识别本工具的 Prompt 并还原其中的
 真实目标。放在归一化层而不是各个消费点，是为了让下游全部自动正确。
 
-### 5.7 探测必须零副作用
+### 5.7 探测必须零副作用（Claude 与 Codex 都适用）
 
 早期版本用 `claude -p ping` 探测登录状态 —— 结果**在用户的 `~/.claude/projects` 里
-留下了垃圾会话**（实测发现并已清理）。现在改为**证据式判断**：读最近一条会话，
-看它是否以 `isApiErrorMessage` 收尾。既不发起请求，也不需要凭据。
+留下了 5 个垃圾会话**（实测发现并已清理）。现在两边都改为**证据式判断**：
+
+| Agent | 判据 | 不做什么 |
+| --- | --- | --- |
+| Claude Code | 读最近一条会话，看是否以 `isApiErrorMessage` 收尾 | 不发请求 |
+| Codex | `~/.codex/auth.json` 是否存在且有凭据字段 + 最近 5 个会话是否出现鉴权失败标记 | 不发请求 |
+
+结论措辞也刻意保守：Codex 侧只会说「凭据文件存在且最近会话未见鉴权失败
+（**未主动发请求验证**）」，不会把「看起来可用」说成「已验证可用」。
 
 同类约束也写进了测试：`ctx` 夹具把 CLI 路径指向不存在的文件，
-保证测试永远不会启动真实 Agent。
+保证测试永远不会启动真实 Agent（`test_codex_login_probe_accepts_credential_file`
+还会断言探测前后文件集合完全一致，即零副作用）。
 
 ### 5.8 失败判定遵循命令语义，而不是只看退出码
 
@@ -308,6 +347,88 @@ Cursor 没有官方的上下文注入入口，可行手段只剩「项目规则�
 并且**同时检查拼写错误**（Pydantic 默认忽略未知字段，这点很容易埋雷）。
 同类问题也写进了测试。
 
+### 5.12 思维链模型会吃掉输出预算：`finish_reason=length` 要重试而不是报解析失败
+
+接中转站后实测到的第一个真问题：`deepseek-v4-pro` 这类**思维链模型**会先输出一大段
+推理（实测 9.5K–12.4K 字），再写 JSON 正文。默认 `max_tokens=4096` 时预算被推理吃完，
+正文只写了一半就断在 `finish_reason=length`，最终表现为「**JSON 解析失败**」或
+「**模型什么都没返回**」—— 这两句报错都会把人引向完全错误的方向。
+
+正确处理：
+- 检测到 `finish_reason == "length"` 时，把预算**翻倍重试一次**（上限 16384），
+  而不是当作格式问题放弃；
+- 正文为空时回退读 `reasoning_content`（有些网关只把结果放在那里）；
+- 所有失败路径的报错都带上 `finish_reason` / `max_tokens` / `completion_tokens`，
+  让「是不是被截断了」一眼可判。
+
+中转站较慢时用 `AMT_LLM_MAX_TOKENS=8192` 预设预算可省掉那轮翻倍重试。
+另外 `amt compare` 现在会把「LLM 为什么没生效」直接打出来 ——
+早期版本只显示「左右两侧一模一样」，用户无从下手。
+
+### 5.13 「验证结果」也分事实与线索，否则自检会与实现打架
+
+早期实现允许 LLM 在「程序没识别出验证命令」时补上 `validation.tests`，
+但 `amt compare` 的事实不变量里又把 `validation.tests` 当**事实字段**比对 ——
+于是同一份代码既声称「测试结果是事实、LLM 不得覆盖」，又允许 LLM 写进去，
+自检必然报警。真实数据上就撞到了：WorkBuddy 会话用 `slidep-validate` 校验了 18 页幻灯片，
+程序没把它识别成测试命令，LLM 补上后事实字段立即不一致。
+
+现在按来源拆开：
+
+| 来源 | 含义 | 是否参与事实不变量 | 渲染时 |
+| --- | --- | --- | --- |
+| `source="program"` | 程序从会话记录**确定性解析**出的验证结果 | ✅ 参与 | 标注「程序解析」 |
+| `source="llm"` | 程序没识别到，由 LLM **归纳**出的线索 | ❌ 不参与 | 标注「⚠ LLM 归纳（未经程序校验）」 |
+
+LLM 的契约里也不含 `source` 字段 —— 来源由程序标注，不允许模型自称「程序校验通过」。
+
+### 5.14 交互式启动：必须新建独立控制台，且参数不能经过 shell
+
+用户实测反馈：迁移完启动 Codex 时**没有弹出新窗口**，而是「在原有窗口里继续」，
+导致点不进去、没法交互。根因与修复如下。
+
+**① 独立控制台**。早期实现只传了 `CREATE_NEW_PROCESS_GROUP` —— 那只是新建进程组，
+子进程仍然**继承父进程的控制台**，于是 Codex TUI 直接接管了运行 `amt` 的那个终端。
+实测（`GetConsoleWindow` 句柄）：
+
+| 创建方式 | 子进程控制台句柄 | 结果 |
+| --- | --- | --- |
+| `CREATE_NEW_PROCESS_GROUP`（修复前） | 0 | 没有自己的控制台 → 占用当前窗口 |
+| `CREATE_NEW_CONSOLE`（修复后） | 330838 | 独立控制台 ✓ |
+
+同时尝试 `CREATE_BREAKAWAY_FROM_JOB`，让窗口在父进程（或它所在的 Job 对象）退出后
+仍然存活；Job 不允许 breakaway 时该标志会让 `CreateProcess` 失败，因此按阶梯回退。
+「降级」的判据是**用户是否失去独立窗口**，而不是「用了几次尝试」——
+前两档都拿到了新控制台，退到第二档不算降级。
+
+**② 参数不能经过 shell**。Codex 在本机是 `codex.CMD`，`CreateProcess` 无法直接执行
+`.cmd`，必须经 `cmd.exe /c` 包装 —— 而**只要经过 shell，参数就会被再解析一次**。
+实测（`cmd.exe /c shim.cmd "<arg>"`，由 `tests/test_launch.py` 锁定）：
+
+| 参数内容 | 实测结果 |
+| --- | --- |
+| 多行文本 | **只送到第一行**，其余被当成独立命令 |
+| `%PATH%` | 变量被展开，26 字 → 1473 字 |
+| `&` / `\|` | 命令被切断 |
+| `<` / `>` | 整行消失 |
+| `"` | 参数边界被破坏 |
+
+而初始 Prompt 恰好包含换行、引号与可能的 `%`/`&`（内容来自用户原话或 LLM 归纳），
+所以「原样塞进命令行」在 `.cmd` 目标上会**静默残缺** —— 修复前，送进 Codex 的
+实际上只有第一行。现在的策略按目标类型分流：
+
+| 目标形态 | 命令行参数 | 完整 Prompt |
+| --- | --- | --- |
+| 真实可执行文件（`claude.exe` 等，不经 shell） | **完整原文**（含多行） | 原样传递 |
+| `.cmd` / `.bat`（必须经 cmd.exe） | **安全化的单行摘要**（cmd 元字符换同形全角字符） | 写入 `.agent-transfer/initial-prompt.md`，并在摘要中指路 |
+
+**③ 闪退可诊断**。独立窗口里的输出本工具拿不到，若目标 CLI 启动即崩，
+用户只会看到「窗口闪了一下」。因此启动后会短暂观察（1.2 s）：
+进程若已退出，直接报失败并给出退出码 + 引导手动执行，而不是谎报「已启动」。
+
+> 另一条实测约束：**`.cmd` / `.bat` 内不能放非 ASCII 文本**。cmd.exe 按 OEM 代码页
+> 读取批处理，中文注释会被解析成乱码并当作命令执行（本机验证时因此踩到）。
+
 ---
 
 ## 6. 不同 Target 的注入策略
@@ -333,7 +454,7 @@ Canonical Memory
 ### 7.1 测试
 
 ```bash
-pytest            # 166 passed
+pytest            # 213 passed
 ```
 
 测试**不依赖本机真实会话数据**，也不启动任何外部 Agent：
@@ -345,7 +466,9 @@ pytest            # 166 passed
   锁定「必须抽取而不是丢弃」；
 - Cursor 夹具用合成 SQLite（`composerHeaders` + `cursorDiskKV`），并**故意让气泡 UUID
   顺序与时间顺序相反**，锁定「必须按 createdAt 排序」；
-- LLM 测试起一个**真实的 HTTP 服务**（规则模拟器）跑完整请求链路，而不是打桩。
+- LLM 测试起一个**真实的 HTTP 服务**（规则模拟器）跑完整请求链路，而不是打桩；
+- 凭据测试**不会碰真实 `.env`**：每个用例都在 `tmp_path` 里造自己的文件，
+  并断言密钥不会出现在 `model_dump` / `origin` / `key_source()` 的任何输出里。
 
 覆盖的关键行为（节选）：
 
@@ -358,10 +481,14 @@ pytest            # 166 passed
 | 待办精度 | 说明性文本不得被当成待办 |
 | 脱敏 | 同片段不重复上报；密码全掩码；源码常量不误伤；注入产物无原始凭据 |
 | LLM | schema 策略生效与降级；契约不含事实字段；**事实字段不变量** |
+| LLM 适配 | 思维链模型截断后**自动翻倍预算重试**；正文为空时回退 `reasoning_content`；报错带 `finish_reason` |
+| 验证结果归属 | LLM 补充的验证线索打 `source="llm"`，不参与事实不变量，且渲染时标注 |
+| 凭据文件 | `.env` 键名别名、查找顺序、环境变量优先、密钥不落盘、`--init` 不固化运行时覆盖 |
 | 目标无关性 | 换目标 Agent 后 Memory 逐字节不变 |
 | 注入幂等 | `CLAUDE.md` / `AGENTS.md` 三次迁移后仍只有一个标记段 |
+| 交互式启动 | 必须请求 `CREATE_NEW_CONSOLE`；breakaway 被拒时回退且**不误报降级**；`.cmd` 目标只传安全化单行摘要 + 完整 Prompt 落盘；启动即退时必须报失败 |
 | 降级 | 目标 CLI 缺失 → 生成上下文 + 手动启动，Memory 完整保留 |
-| 探测副作用 | 登录状态探测不得新增会话文件 |
+| 探测副作用 | 登录状态探测不得新增会话文件（Claude / Codex 各一条） |
 
 ### 7.2 真实数据端到端
 
@@ -371,24 +498,101 @@ pytest            # 166 passed
 | Codex → Claude Code | 5 个上下文文件注入，`CLAUDE.md` 幂等引入，产物校验 13/13 |
 | Claude Code → Codex | 真实会话解析（19 条记录 → 用户消息 + API 错误），`AGENTS.md` 内联注入成功 |
 | Cursor → Codex | 真实 Composer 会话（9 个气泡 → 3 用户 + 3 助手 + 3 思考），`AGENTS.md` 内联注入成功 |
-| **WorkBuddy → Codex** | **217 条记录 0 解析失败** → 45 条快照记账被跳过、**2 条需求从 `<user_query>` 还原**、64 对工具调用全部配对、27 次命令 / 22 次写文件 / 9 次读文件；标题是真实提问而非上万字符的注入文本 |
-| 启发式 vs LLM 对比 | 事实字段 **10/10 全部一致**；语义差异（决策、失败经验条数）如实列出 |
+| **WorkBuddy → Codex（含真实 LLM）** | 见下 |
 | 敏感信息 | 会话内 33 处（24 处 key=value、9 处 bearer token），落盘与注入前均脱敏 |
 
-> ⚠ Claude Code 的 CLI 已安装（2.1.284），但当前**未登录**（`Not logged in · Please run /login`）。
-> 因此「自动启动并接续」这一步在本机无法完成 —— 这也正是 POC 保留
-> 「生成上下文 + 手动启动」降级路径的原因。**任务接续率（T3）仍未验证**。
+#### WorkBuddy → Codex（真实模型 + 真实交接）
+
+来源是用户提供的 WorkBuddy 会话（PPT 制作任务），全程真实数据、真实中转站模型：
+
+| 环节 | 实测 |
+| --- | --- |
+| 解析 | 217 条记录 **0 解析失败**；172 个 AgentEvent；45 条 `file-history-snapshot` 记账正确跳过 |
+| 需求还原 | 2 条需求从 `<user_query>` 抽出（标题是真实提问，不是上万字符的注入文本） |
+| Memory 构建 | LLM（`deepseek-v4-pro`）97.7 s，12386 tokens，策略 `json_schema`，思维链 9588 字；置信度 `high` |
+| 脱敏 | 会话内 0 处、Memory 本体 0 处（该会话无凭据） |
+| 注入 | 5 个文件：`.agent-transfer/{memory.md,memory.json,manifest.json,source.json}` + `AGENTS.md` 内联段 |
+| 校验 | 产物校验 **13/13**；2 条警告均为真实情况（沙箱里没有那份 pptx；目录不是 Git 仓库） |
+| 幂等 | 同一 Memory 连续注入 3 次，`AGENTS.md` **sha256 完全一致**、标记段恒为 1 组、原项目约定保留 |
+| 验证结果归属 | `slidep-validate`（程序未识别）被打上 `source="llm"`，渲染为「⚠ LLM 归纳（未经程序校验）」 |
+
+#### 启发式 vs 真实模型的质量增量（`amt compare`）
+
+同一会话跑两条通道，真实中转站模型（`deepseek-v4-pro`，96.1 s / 12461 tokens）：
+
+| 语义字段 | 启发式 | LLM |
+| --- | --- | --- |
+| `task.title` | `给一些会使用codex进行开发的同事进行分享，你觉得我分享什么内容比较好`（原话照搬） | `Codex 高效开发经验分享（30分钟）` |
+| `task.goal` | 同上 + 截断的后续要求 | 凝练成「为使用 Codex 约三个月、以问答式生成和修改代码的同事制作一场 30 分钟…」 |
+| `requirements` | 2 条 | **4 条** |
+| `constraints` | 0 条 | **2 条** |
+| `decisions` | 0 条 | **4 条** |
+| `implementation.completed` | 2 条 | **8 条** |
+| `conversation.summary` | 101 字 | 136 字 |
+| `confidence` | medium | high |
+| **事实字段不变量** | — | **10/10 全部一致 ✅** |
+
+结论很清楚：**启发式的短板是「归纳」，不是「读取」**——目标字段基本是把用户原话
+原样搬过来，决策与约束几乎零召回；而 LLM 的主要增益正好落在这一块。
+事实字段（项目 / Git / 运行时 / 程序解析出的测试结果）两侧完全一致，
+证明「LLM 不得覆盖事实」这条约束在真实模型上确实成立，而不只是设计意图。
+
+#### 换模型：同一会话下的两个模型对比
+
+同一会话、同一条件，只换 `--llm-model`（该中转站共 16 个可用模型）：
+
+| 指标 | `deepseek-v4-pro` | `deepseek-v4.1-flash` |
+| --- | --- | --- |
+| 耗时 | 96.1 s | **38.7 s** |
+| total tokens | 12461 | 10572 |
+| 思维链长度 | 10533 字 | 5694 字 |
+| `task.title` | `Codex 高效开发经验分享（30分钟）` | `为使用 Codex 的同事做 30 分钟分享并产出 18 页 PPT` |
+| requirements / constraints | 4 / 2 | 4 / 2 |
+| decisions | 4 | **5** |
+| completed | 8 | **12** |
+| unresolved | 1 | **3** |
+| next_actions | 1 | **3** |
+| risks | 0 | **3** |
+| summary 字数 | 136 | **280** |
+| **事实字段不变量** | 10/10 ✅ | 10/10 ✅ |
+
+两点结论：
+
+1. **两者都安全** —— 事实字段在任意模型下都保持不变，这是结构性保证而非模型行为。
+2. **本例中 flash 更划算** —— 快 2.5 倍，且对「未解决问题 / 下一步 / 风险」的召回更全
+   （这几项恰恰是交接最需要的信息）；pro 的优势只体现在标题更凝练。
+   条数多不等于质量高，但交接场景下**漏掉未解决问题**的代价明显更大。
+
+#### 目标 Agent 真的读到了吗（T3 的替代验证）
+
+只证明「文件写对了」还不够。Codex CLI 在本机可用（`codex-cli 0.149.1`，
+另有独立 `CODEX_HOME` 做隔离、`--ephemeral` 不落会话文件），因此在沙箱工程里实跑了一次：
+
+```text
+workdir: D:\Memory_transfer\_wb2codex\proj     sandbox: read-only
+user> （只读任务）接续上下文里的任务目标和状态是什么？已完成的工作一共多少页？
+codex> 目标：为已使用 Codex 三个月的同事准备 30 分钟分享，产出含逐页讲稿的完整 PPT；
+       状态：completed。已完成的分享材料共做成 18 页完整胶片，并在每页备注中写现场逐字讲稿。
+```
+
+Codex **没有重新分析项目**，直接答出了注入上下文里的目标、状态与页数。
+隔离校验：运行前后用户真实 `~/.codex` 的会话文件均为 **71 个（未新增）**，
+沙箱工程只读未改动，隔离 `CODEX_HOME`（含凭据副本）已整体删除。
+
+> ⚠ Claude Code 侧的任务接续仍**未验证**：CLI 已安装（2.1.284）但未登录
+> （`Not logged in · Please run /login`），只能走到 Level 1/2。
+> 这也正是 POC 保留「生成上下文 + 手动启动」降级路径的原因。
 
 ---
 
 ## 8. 已知限制
 
-1. **任务接续率（T3）未验证**。文档 §33 的 Level 3 指标需要在目标 Agent 中实际观察
-   「是否重复已完成工作」。本机 Claude CLI 未登录，只完成了 Level 1/2。
-   这是当前最重要的未验证项。
-2. **LLM 通道未用真实模型验证**。本机没有可用端点，端到端验证用的是内置的
-   **规则模拟器**（`tools/mock_llm_server.py`）。它能证明链路的正确性，
-   **不能代表真实模型的归纳质量**。`amt compare` 的输出会显式标注这一点。
+1. **Claude Code 侧的任务接续未验证**。文档 §33 的 Level 3 指标需要在目标 Agent 中
+   实际观察「是否重复已完成工作」。Codex 方向已实跑验证（见 §7.2），但 Claude CLI
+   在本机**未登录**，只能走到 Level 1/2。这是当前最重要的未验证项。
+2. **LLM 只在中转站的两个模型上验证过**（`deepseek-v4-pro`、`deepseek-v4.1-flash`，
+   均为 Anthropic 风格网关 + 思维链）。官方 OpenAI / 本地 vLLM 的
+   `response_format` 行为可能不同 —— 降级阶梯与截断重试已覆盖这类差异，但未逐一实测。
 3. **Claude Code 解析器基于合成夹具 + 实测格式**。真实会话结构已在本机确认
    （2.1.284），但样本只有登录失败的空会话；工具调用/编辑路径由夹具覆盖。
 4. **Cursor 的 diff → 文件改动分支未在真实数据上验证**。本机 Cursor 里只有 Q&A 会话，
@@ -400,17 +604,27 @@ pytest            # 166 passed
 6. **WorkBuddy/Cursor 的 Source 会读取本机数据目录**。`workbuddy` 默认扫描
    `~/.workbuddy/projects`；如果不希望默认行为，可在配置里把 `workbuddy.projects_dir`
    指向别处（示例见 `tools/generate_example.py`，它把全部数据源都指向沙箱）。
-7. **`build` 与 `test` 共用 `EventType.TEST`**，靠 `category` 区分（为保持 10 个规范类型不变）。
-8. **`collect_project_state` 在大仓库上耗时约 0.7–7 秒**（主要是 `git status` / `git diff --stat`）。
-9. **`SessionInfo.resumable`**：Codex/Claude 恒为 `True`（会话文件可读即可恢复），
-   Cursor/WorkBuddy 恒为 `False`（无 CLI 恢复入口）。
+7. **思维链模型的时间与费用成本不低**。一个 172 事件、5.4K prompt tokens 的会话，
+   `deepseek-v4-pro` 实测 96 s / 12.4K tokens，`deepseek-v4.1-flash` 为 38.7 s / 10.6K。
+   更大的会话（digest 14329 tokens）实测 **279.7 s**，请把 `AMT_LLM_TIMEOUT` 放宽到 600–900。
+8. **交互式启动的开销与边界**。目标 CLI 为 `.cmd`/`.bat` 时，命令行只能传安全化摘要
+   （完整 Prompt 落盘为 `initial-prompt.md`）；独立窗口的输出本工具无法捕获，
+   因此只能靠 1.2 s 的存活探测识别「启动即崩」，看不到具体报错内容。
+9. **`build` 与 `test` 共用 `EventType.TEST`**，靠 `category` 区分（为保持 10 个规范类型不变）。
+10. **`collect_project_state` 在大仓库上耗时约 0.7–7 秒**（主要是 `git status` / `git diff --stat`）。
+11. **`SessionInfo.resumable`**：Codex/Claude 恒为 `True`（会话文件可读即可恢复），
+    Cursor/WorkBuddy 恒为 `False`（无 CLI 恢复入口）。
+12. **`amt agents` 的「可自动启动」只是证据式推断**，不是实跑验证 ——
+    凭据可能存在但已过期，真正能否接续要以实际迁移为准。
 
 ---
 
 ## 9. 下一步
 
-1. **验证 T3**：在有可用 Claude/Codex 额度（或已登录）的环境跑一次完整接续，观察是否重复劳动。
-2. **用真实模型跑 `amt compare`**：先 `amt llm-check` 打通中转站，再对比启发式与 LLM 的质量增量。
+1. **Claude Code 侧的任务接续验证**：登录后跑
+   `amt migrate --from codex --to claude --session <id>`，观察目标 Agent 是否重复劳动。
+2. **多模型横向对比**：已跑通 2 个模型（见 §7.2）；可把 `claude-opus-5`、
+   `qwen3.8-max`、`glm-5.3` 等一并纳入，形成「模型 → 记忆质量 / 耗时 / 成本」的选型表。
 3. **WorkBuddy Target**：确认工作区记忆文件的加载机制后，按同一套 Adapter 结构补上。
 4. **Mimo Code / OpenCode / Antigravity Adapter**：同样只需新增 Adapter 目录。
 5. **桌面端 GUI**：当前用 HTML 报告替代；若需要常驻工具，再考虑 Tauri + Python sidecar。

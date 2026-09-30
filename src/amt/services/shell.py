@@ -172,6 +172,48 @@ class ShellResolver:
             return [cmd_exe, "/c", executable, *args]
         return [executable, *args]
 
+    # ------------------------------------------------------------------
+    def needs_shell_wrapper(self, executable: str) -> bool:
+        """该可执行文件是否必须经 shell 包装（``.cmd`` / ``.bat``）。
+
+        这个判断很重要：**只要经过 shell，参数就会被 shell 再解析一次**，
+        任意文本（换行、``%``、``&``、``|``、``<``、``>``、引号）都可能被破坏。
+        实测：``cmd.exe /c shim.cmd "<多行 Prompt>"`` 只会把**第一行**送到目标程序，
+        ``%PATH%`` 会被展开成上千字符，``<``/``>`` 甚至会让整行消失。
+        """
+        if not IS_WINDOWS:
+            return False
+        return Path(executable).suffix.lower() in _BATCH_SUFFIXES
+
+    @staticmethod
+    def sanitize_argument(text: str, *, limit: int = 600) -> str:
+        """把任意文本压成**能安全穿过 cmd.exe 的单行参数**。
+
+        做法是把 cmd 的元字符换成同形全角字符（视觉几乎不变，但不再有语义），
+        并把所有空白折叠成单个空格。这样得到的字符串可以安全地作为
+        ``cmd.exe /c`` 的参数传递，不需要依赖脆弱的转义规则
+        （cmd 的引号/``^`` 转义规则在命令行与批处理中并不一致）。
+
+        注意：**这必然改变原文**，所以只用于「命令行摘要」；
+        完整原文必须另存为文件交付。
+        """
+        collapsed = " ".join(text.split())
+        table = {
+            "%": "％",   # 变量展开：实测 %PATH% 会被替换成上千字符
+            "&": "＆",   # 命令分隔：实测会把参数截断
+            "|": "｜",   # 管道
+            "<": "＜",   # 重定向：实测会让整行消失
+            ">": "＞",
+            "^": "＾",   # 转义符
+            '"': "'",    # 双引号会破坏参数边界
+            "`": "｀",
+        }
+        out = "".join(table.get(ch, ch) for ch in collapsed)
+        if len(out) > limit:
+            out = out[: limit - 1] + "…"
+        return out
+
+
     def shell_argv(self, command: str, *, shell: ShellType | None = None) -> list[str]:
         """把一段 shell 命令字符串包成 argv（用于确实需要 shell 语义的场景）。"""
         chosen = shell or self.detect().type

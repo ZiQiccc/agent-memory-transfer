@@ -177,6 +177,13 @@ class LaunchResult(BaseModel):
     degraded: bool = False
     """目标 Agent 未安装 / 无法自动启动时为 True，此时 Memory 仍需保留供手动恢复。"""
 
+    warnings: list[str] = Field(default_factory=list)
+    """启动过程中的说明（例如「命令行只传单行摘要，完整 Prompt 已落盘」）。
+
+    必须显式建模：``_BASE`` 是 ``extra="ignore"``，随手多传的字段会被静默丢弃，
+    用户就看不到这些解释了。
+    """
+
 
 class SecretFinding(BaseModel):
     model_config = _BASE

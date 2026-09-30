@@ -161,24 +161,82 @@ class ProcessManager:
         *,
         cwd: str | Path | None = None,
         env: dict[str, str] | None = None,
+        new_console: bool = True,
+        alive_check_seconds: float = 0.0,
     ) -> tuple[subprocess.Popen | None, str]:
-        """启动长驻进程（如交互式 CLI）。返回 (进程, 说明)。"""
-        try:
-            creationflags = 0
-            if os.name == "nt":
-                # 新进程组：让目标 Agent 在独立控制台/窗口运行。
-                creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            proc = subprocess.Popen(
-                argv,
-                cwd=str(cwd) if cwd else None,
-                env={**os.environ, **(env or {})} if env else None,
-                creationflags=creationflags,
-            )
-            return proc, "ok"
-        except FileNotFoundError:
-            return None, f"找不到可执行文件：{argv[0] if argv else ''}"
-        except OSError as exc:
-            return None, f"启动失败：{exc}"
+        """启动长驻的**交互式**进程（如 Codex / Claude Code 的 TUI）。
+
+        关键：Windows 上必须用 ``CREATE_NEW_CONSOLE``。
+
+        早期实现只用了 ``CREATE_NEW_PROCESS_GROUP`` —— 那只是新建进程组，
+        子进程仍然**继承父进程的控制台**。于是启动出来的 Codex TUI 会直接接管
+        运行 ``amt`` 的那个终端窗口，用户既看不到新窗口也无法切换进去。
+        实测证据（``GetConsoleWindow`` 句柄）：
+
+            CREATE_NEW_PROCESS_GROUP → 子进程句柄 0（无自己的控制台）
+            CREATE_NEW_CONSOLE       → 子进程句柄 330838（独立控制台）
+
+        ``CREATE_BREAKAWAY_FROM_JOB`` 一并尝试，是为了让窗口在父进程（或它所在的
+        Job 对象）退出后依然存活 —— 否则某些宿主（IDE 终端、带 kill-on-close 的
+        Job）会连带杀掉刚打开的 Agent 窗口。Job 不允许 breakaway 时该标志会导致
+        CreateProcess 失败，因此按阶梯回退。
+
+        交互式进程**绝不重定向标准流**：一旦重定向就失去控制台，
+        TUI 会退化成不可交互的管道进程。反过来说，独立窗口里的输出我们也拿不到 ——
+        所以 ``alive_check_seconds > 0`` 时会在启动后短暂观察：若进程已经退出，
+        说明目标 CLI 启动即崩，此时必须**报失败**并提示手动执行，
+        否则用户只会看到「窗口闪了一下」而无从排查。
+        """
+        # (creationflags, 说明, 是否降级)
+        #
+        # 「降级」的判据是**用户是否失去独立窗口**，而不是「用了几次尝试」：
+        # 前两种方式都拿到了新控制台，只是第一种额外尝试脱离 Job，
+        # 因此第一种失败退到第二种**不算降级**（否则会误导用户以为窗口有问题）。
+        attempts: list[tuple[int, str, bool]] = []
+        if new_console and os.name == "nt":
+            new_console_flag = getattr(subprocess, "CREATE_NEW_CONSOLE", 0x00000010)
+            breakaway = 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
+            attempts = [
+                (new_console_flag | breakaway, "新控制台 + 脱离 Job", False),
+                (new_console_flag, "新控制台", False),
+                (
+                    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                    "新进程组（会占用当前窗口）",
+                    True,
+                ),
+            ]
+        else:
+            # POSIX：新建会话，脱离父进程的终端组
+            attempts = [(0, "默认", False)]
+
+        errors: list[str] = []
+        for creationflags, label, degraded in attempts:
+            try:
+                proc = subprocess.Popen(
+                    argv,
+                    cwd=str(cwd) if cwd else None,
+                    env={**os.environ, **(env or {})} if env else None,
+                    creationflags=creationflags,
+                    close_fds=True,
+                )
+            except FileNotFoundError:
+                return None, f"找不到可执行文件：{argv[0] if argv else ''}"
+            except OSError as exc:
+                errors.append(f"{label}: {exc}")
+                continue
+
+            if alive_check_seconds > 0:
+                time.sleep(alive_check_seconds)
+                code = proc.poll()
+                if code is not None:
+                    return None, (
+                        f"目标进程启动后立即退出（退出码 {code}）。"
+                        "它运行在独立窗口里，输出无法被本工具捕获 —— "
+                        "请手动执行上面打印的启动命令以查看具体报错"
+                    )
+
+            return proc, (f"已降级为「{label}」" if degraded else "ok")
+        return None, describe_start_failure(errors)
 
     def terminate(self, proc: subprocess.Popen | None) -> None:
         if proc is None:
@@ -187,6 +245,30 @@ class ProcessManager:
             proc.terminate()
         except Exception:
             pass
+
+
+def describe_start_failure(errors: list[str]) -> str:
+    """把多次尝试的失败原因压成一句可诊断的话。
+
+    阶梯重试会产生多条**内容相同**的错误（例如环境策略一律拒绝创建进程），
+    原样拼接只会让用户更难读，因此去重后再补充针对性的排查提示。
+    """
+    if not errors:
+        return "启动失败：原因未知"
+    _, _, message = errors[0].partition(": ")
+    reasons = {e.partition(": ")[2] for e in errors}
+    if len(reasons) == 1:
+        text = f"启动失败：{message}（{len(errors)} 种创建方式均被拒绝）"
+    else:
+        text = "启动失败：" + "；".join(errors)
+
+    if "WinError 5" in text or "拒绝访问" in text:
+        text += (
+            "。这类错误通常不是参数问题，而是执行环境禁止创建进程："
+            "可尝试在普通终端（而非受限沙箱 / 受管 IDE 终端）中重跑，"
+            "或用 --no-launch 后手动执行上面打印的启动命令"
+        )
+    return text
 
 
 def executable_version(

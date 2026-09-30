@@ -194,11 +194,13 @@ class OpenAICompatibleProvider(LLMProvider):
                     continue
 
                 if not content:
-                    attempts.append(
-                        f"{strategy}: 返回内容为空（finish_reason={finish_reason}，"
-                        f"max_tokens={budget}，completion_tokens={_usage_int(body, 'completion_tokens')}）"
+                    detail = (
+                        f"LLM 返回内容为空（finish_reason={finish_reason}，"
+                        f"max_tokens={budget}，"
+                        f"completion_tokens={_usage_int(body, 'completion_tokens')}）"
                     )
-                    last_error = "LLM 返回内容为空"
+                    attempts.append(f"{strategy}: {detail}")
+                    last_error = detail
                     break
 
                 try:

@@ -21,6 +21,7 @@ from amt.core.memory.llm_schema import MemoryPatch, memory_patch_schema
 from amt.core.memory.renderer import (
     PROMPT_GOAL_HEADER,
     render_initial_prompt,
+    render_markdown,
     unwrap_injected_prompt,
 )
 from amt.core.models import MigrationOptions, SessionMetadata
@@ -96,13 +97,13 @@ def test_provider_falls_back_when_schema_unsupported(mock_llm, monkeypatch):
     calls: list[str] = []
     original = provider._post
 
-    def fake_post(strategy, system, user, schema_name):
+    def fake_post(strategy, system, user, schema_name, max_tokens):
         calls.append(strategy)
         if strategy == "json_schema":
             from amt.providers.llm import _RetryableStrategy
 
             raise _RetryableStrategy("HTTP 400：不支持 response_format")
-        return original(strategy, system, user, schema_name)
+        return original(strategy, system, user, schema_name, max_tokens)
 
     monkeypatch.setattr(provider, "_post", fake_post)
     result = provider.generate_structured(system="s", user="[01-01 00:00] USER_MESSAGE hi")
@@ -246,4 +247,166 @@ def test_llm_cannot_override_git_or_project(ctx, codex_source, project_root, moc
     heuristic, llm = _build_both(ctx, codex_source, project_root, mock_llm)
     assert llm.memory.git.branch == heuristic.memory.git.branch
     assert llm.memory.project.path == heuristic.memory.project.path
-    assert llm.memory.validation.tests == heuristic.memory.validation.tests
+    # 只比对「程序解析」的验证结果：LLM 补充的线索属于语义，见下一个用例
+    assert [t for t in llm.memory.validation.tests if t.source == "program"] == [
+        t for t in heuristic.memory.validation.tests if t.source == "program"
+    ]
+
+
+# ----------------------------------------------------------------------
+# 中转站实测出的两类适配（思维链模型 + 输出截断）
+# ----------------------------------------------------------------------
+def test_truncated_output_escalates_token_budget(mock_llm, monkeypatch):
+    """``finish_reason=length`` 时应自动加预算重试，而不是报「JSON 解析失败」。
+
+    真实场景：中转站转发的思维链模型会把 4096 预算先花在推理上，
+    正文才写到一半就被截断 —— 报一个「解析失败」会让人以为是格式问题。
+    """
+    config = LLMConfig(
+        enabled=True, base_url=mock_llm, model="mock", timeout=15, max_output_tokens=1024
+    )
+    provider = OpenAICompatibleProvider(config)
+
+    budgets: list[int] = []
+
+    def fake_post(strategy, system, user, schema_name, max_tokens):
+        budgets.append(max_tokens)
+        if len(budgets) == 1:
+            # 第一次：被截断的 JSON（未闭合）
+            return {"choices": [{"finish_reason": "length", "message": {"content": '{"task": {'}}]}, "length"
+        return (
+            {"choices": [{"finish_reason": "stop", "message": {"content": '{"next_actions": []}'}}]},
+            "stop",
+        )
+
+    monkeypatch.setattr(provider, "_post", fake_post)
+    result = provider.generate_structured(system="s", user="u")
+
+    assert budgets[0] == 1024
+    assert budgets[1] == 2048, "应把预算翻倍后重试"
+    assert result.truncated is True
+    assert result.max_tokens_used == 2048
+    assert any("截断" in a for a in result.attempts)
+
+
+def test_reasoning_content_is_used_when_content_is_empty(mock_llm, monkeypatch):
+    """思维链模型若只把结果放在 ``reasoning_content``，不能被判成「什么都没返回」。"""
+    provider = OpenAICompatibleProvider(
+        LLMConfig(enabled=True, base_url=mock_llm, model="mock", timeout=15)
+    )
+
+    def fake_post(strategy, system, user, schema_name, max_tokens):
+        return (
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": "",
+                            "reasoning_content": '{"task": {"title": "来自思考块"}}',
+                        },
+                    }
+                ]
+            },
+            "stop",
+        )
+
+    monkeypatch.setattr(provider, "_post", fake_post)
+    result = provider.generate_structured(system="s", user="u")
+    assert result.data["task"]["title"] == "来自思考块"
+    assert result.content_source == "reasoning_content"
+    assert result.reasoning_chars > 0
+
+
+def test_empty_content_reports_finish_reason(mock_llm, monkeypatch):
+    """真的拿不到内容时，错误信息必须带上 finish_reason，便于定位是不是被截断。"""
+    provider = OpenAICompatibleProvider(
+        LLMConfig(enabled=True, base_url=mock_llm, model="mock", timeout=15, max_output_tokens=16384)
+    )
+
+    def fake_post(strategy, system, user, schema_name, max_tokens):
+        return (
+            {"choices": [{"finish_reason": "content_filter", "message": {"content": ""}}]},
+            "content_filter",
+        )
+
+    monkeypatch.setattr(provider, "_post", fake_post)
+    with pytest.raises(LLMUnavailable) as excinfo:
+        provider.generate_structured(system="s", user="u")
+    assert "finish_reason=content_filter" in str(excinfo.value)
+
+
+# ----------------------------------------------------------------------
+# LLM 补充的验证线索：有用，但必须与「程序校验的事实」区分开
+# ----------------------------------------------------------------------
+def test_llm_supplied_tests_are_tagged_and_keep_fact_invariant(
+    ctx, codex_source, project_root, monkeypatch
+):
+    """程序没识别出验证命令时，允许 LLM 补充 —— 但必须打上来源标记，
+    且不得破坏「事实字段不变量」，否则自检与实现会自相矛盾。"""
+    from amt.core.memory import extractor as extractor_module
+    from amt.providers.llm import LLMResult
+
+    class StubProvider:
+        name = "stub"
+
+        def available(self):
+            return True, "ok"
+
+        def generate_structured(self, *, system, user, schema_name="canonical_memory"):
+            return LLMResult(
+                data={
+                    "validation": {
+                        "tests": [
+                            {"command": "slidep-validate", "status": "passed", "output_summary": "ok"}
+                        ]
+                    }
+                },
+                provider=self.name,
+                model="stub",
+                strategy="json_schema",
+            )
+
+    monkeypatch.setattr(extractor_module, "build_provider", lambda _cfg: StubProvider())
+
+    ctx.config.llm.enabled = True
+    raw = codex_source.load_session("01a08943-75e9-7953-bcc1-141f7ad3cc3d")
+    events = codex_source.parse_events(raw)
+    project = codex_source.collect_project_state(str(project_root))
+    runtime = codex_source.collect_runtime_state(str(project_root))
+    engine = MemoryEngine(ctx)
+    outcome = engine.build(
+        memory_id="mem_t",
+        session=None,
+        raw_events=events,
+        project=project,
+        runtime=runtime,
+        options=MigrationOptions(use_llm=True),
+    )
+
+    program_tests = [t for t in outcome.memory.validation.tests if t.source == "program"]
+    llm_tests = [t for t in outcome.memory.validation.tests if t.source == "llm"]
+    if program_tests:
+        # 程序识别到了验证命令 → LLM 不得覆盖
+        assert not llm_tests
+    else:
+        assert [t.command for t in llm_tests] == ["slidep-validate"]
+
+    # 渲染必须标明来源，不能让目标 Agent 误以为是程序校验通过
+    text = render_markdown(outcome.memory)
+    assert "程序解析" in text or "LLM 归纳" in text
+
+    # 事实不变量仍然成立：LLM 补充的线索不计入事实
+    heuristic = engine.build(
+        memory_id="mem_h",
+        session=None,
+        raw_events=events,
+        project=project,
+        runtime=runtime,
+        options=MigrationOptions(use_llm=False),
+    )
+    comparison = MemoryComparer().compare(heuristic, outcome)
+    mismatched = [d.field for d in comparison.fact_fields if d.delta != "一致"]
+    assert not mismatched, mismatched
+    fields = {d.field for d in comparison.semantic_fields}
+    assert "validation.tests LLM 补充线索（条）" in fields
